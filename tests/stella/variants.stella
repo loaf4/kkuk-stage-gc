@@ -1,0 +1,38 @@
+// A list of sums built with a tuple as the loop state: even steps add
+// Sum::inl(i), odd steps add Sum::inr(flag). The total adds the numbers and
+// counts the flags.
+// Result for n = 10: (0 + 2 + 4 + 6 + 8) + 5 = 25.
+language core;
+extend with #lists, #tuples, #sum-types, #type-ascriptions, #nat-recursion,
+            #named-recursion;
+
+fn add(n : Nat) -> fn(Nat) -> Nat {
+  return fn(m : Nat) { return Nat::rec(n, m, |i, acc| Nat::succ(acc)) }
+}
+
+fn step(i : Nat) -> fn((Bool, List[Nat + Bool])) -> (Bool, List[Nat + Bool]) {
+  return fn(state : (Bool, List[Nat + Bool])) {
+    return if state.1
+      then (Bool::false, List::cons(Sum::inl(i) as Nat + Bool, state.2))
+      else (Bool::true, List::cons(Sum::inr(state.1) as Nat + Bool, state.2))
+  }
+}
+
+fn value(item : Nat + Bool) -> Nat {
+  return match item {
+    Sum::inl(number) => number
+  | Sum::inr(flag) => Nat::succ(Nat::zero)
+  }
+}
+
+fn total(items : List[Nat + Bool]) -> Nat {
+  return match items {
+    List::nil => Nat::zero
+  | List::cons(item, rest) => add(value(item))(total(rest))
+  }
+}
+
+fn main(n : Nat) -> Nat {
+  return total(
+    Nat::rec(n, (Bool::true, List::nil as List[Nat + Bool]), |i, state| step(i)(state)).2)
+}

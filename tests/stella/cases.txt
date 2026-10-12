@@ -1,0 +1,57 @@
+# PROGRAM ARGUMENT LIMIT EXPECTED
+#
+# PROGRAM is the path of the generated C file without the extension, LIMIT is
+# the heap limit in bytes or "default" (64 MiB, no collections at all).
+# For every program and argument there are three limits: default, the smallest
+# limit the program can run with (found by bisection, one word less gives
+# "cannot allocate"), and twice that.
+
+examples/double 10 default 20
+examples/double 10 960 20
+examples/double 10 1920 20
+examples/double 20 1920 40
+
+examples/playlist 10 default 55
+examples/playlist 10 3840 55
+examples/playlist 10 7680 55
+examples/playlist 20 default 210
+examples/playlist 20 10880 210
+examples/playlist 20 21760 210
+
+examples/chat 10 default 45
+examples/chat 10 2984 45
+examples/chat 10 4096 45
+examples/chat 20 default 190
+examples/chat 20 9384 190
+examples/chat 20 18768 190
+
+examples/history 10 default 10
+examples/history 10 1392 10
+examples/history 10 2784 10
+examples/history 20 2752 20
+
+tests/stella/squares 10 default 285
+tests/stella/squares 10 14976 285
+tests/stella/squares 10 29952 285
+tests/stella/squares 20 default 2470
+tests/stella/squares 20 103456 2470
+tests/stella/squares 20 206912 2470
+
+tests/stella/alias 10 default 10
+tests/stella/alias 10 1424 10
+tests/stella/alias 10 2848 10
+tests/stella/alias 20 2784 20
+
+tests/stella/variants 10 default 25
+tests/stella/variants 10 2592 25
+tests/stella/variants 10 5184 25
+tests/stella/variants 20 default 100
+tests/stella/variants 20 6672 100
+tests/stella/variants 20 13344 100
+
+tests/stella/reverse 10 default 45
+tests/stella/reverse 10 3840 45
+tests/stella/reverse 10 7680 45
+tests/stella/reverse 20 default 190
+tests/stella/reverse 20 10880 190
+tests/stella/reverse 20 21760 190

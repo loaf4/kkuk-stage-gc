@@ -1,0 +1,37 @@
+// Builds the list of records n-1, ..., 0, reverses it n times and adds up the
+// positions. Every reversal makes a full new copy of the list, and the
+// previous copy becomes garbage only after the new one is complete.
+// Result: 0 + 1 + ... + (n-1), that is 45 for n = 10.
+language core;
+extend with #lists, #records, #type-ascriptions, #nat-recursion, #named-recursion;
+
+fn add(n : Nat) -> fn(Nat) -> Nat {
+  return fn(m : Nat) { return Nat::rec(n, m, |i, acc| Nat::succ(acc)) }
+}
+
+fn range(n : Nat) -> List[{position : Nat}] {
+  return Nat::rec(n, List::nil as List[{position : Nat}],
+    |i, items| List::cons({position = i}, items))
+}
+
+fn reverse_onto(done : List[{position : Nat}]) -> fn(List[{position : Nat}]) -> List[{position : Nat}] {
+  return fn(items : List[{position : Nat}]) {
+    return match items {
+      List::nil => done
+    | List::cons(item, rest) => reverse_onto(List::cons(item, done))(rest)
+    }
+  }
+}
+
+fn total(items : List[{position : Nat}]) -> Nat {
+  return match items {
+    List::nil => Nat::zero
+  | List::cons(item, rest) => add(item.position)(total(rest))
+  }
+}
+
+fn main(n : Nat) -> Nat {
+  return total(
+    Nat::rec(n, range(n),
+      |i, items| reverse_onto(List::nil as List[{position : Nat}])(items)))
+}

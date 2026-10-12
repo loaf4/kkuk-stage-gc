@@ -1,0 +1,21 @@
+// Two references to one list: the inner cell holds the list, the outer cell
+// holds the inner cell. Every step writes a new list into the inner cell,
+// which was created long ago, and reaches it through the outer one.
+// Result: the length of the list, that is n.
+language core;
+extend with #lists, #references, #sequencing, #let-bindings, #type-ascriptions,
+            #unit-type, #nat-recursion, #named-recursion;
+
+fn length(items : List[Nat]) -> Nat {
+  return match items {
+    List::nil => Nat::zero
+  | List::cons(item, rest) => Nat::succ(length(rest))
+  }
+}
+
+fn main(n : Nat) -> Nat {
+  return let inner = Ref::new(List::nil as List[Nat]) in
+    let outer = Ref::new(inner) in
+    Nat::rec(n, Unit::unit, |i, done| (!outer) := List::cons(i, !(!outer)));
+    length(!inner)
+}

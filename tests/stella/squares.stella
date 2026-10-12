@@ -1,0 +1,18 @@
+// Sum of squares 0*0 + 1*1 + ... + (n-1)*(n-1).
+// Multiplication by repeated addition produces a lot of short-lived numbers
+// and closures; only the running total stays reachable.
+// Result: (n-1)n(2n-1)/6, that is 285 for n = 10.
+language core;
+extend with #nat-recursion, #named-recursion;
+
+fn add(n : Nat) -> fn(Nat) -> Nat {
+  return fn(m : Nat) { return Nat::rec(n, m, |i, acc| Nat::succ(acc)) }
+}
+
+fn mul(n : Nat) -> fn(Nat) -> Nat {
+  return fn(m : Nat) { return Nat::rec(n, Nat::zero, |i, acc| add(m)(acc)) }
+}
+
+fn main(n : Nat) -> Nat {
+  return Nat::rec(n, Nat::zero, |i, total| add(mul(i)(i))(total))
+}
