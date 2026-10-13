@@ -2,6 +2,10 @@
 # Builds and runs the collector tests. Run from anywhere:
 #
 #   tests/run.sh                  all tests, built with sanitizers
+#   tests/run.sh c                only the tests written in C
+#   tests/run.sh stella           only the Stella programs
+#   tests/run.sh barrier          one test: a file from tests/c without ".c"
+#   tests/run.sh squares          ... or a program from tests/stella/cases.txt
 #   CFLAGS="-std=c11 -O2" tests/run.sh
 #
 # Every test is repeated for each size of the young generation in YOUNG_SIZES
@@ -13,6 +17,12 @@ CC=${CC:-cc}
 CFLAGS=${CFLAGS:--std=c11 -Wall -Wextra -g -fsanitize=address,undefined -fno-sanitize-recover=all}
 YOUNG_SIZES=${YOUNG_SIZES:-default 1 64 512 1000000}
 BUILD=build/tests
+ONLY=${1:-all}
+
+# selected GROUP NAME: should the test NAME from GROUP (c or stella) run?
+selected() {
+  [ "$ONLY" = all ] || [ "$ONLY" = "$1" ] || [ "$ONLY" = "$2" ]
+}
 
 passed=0
 failed=0
@@ -85,9 +95,10 @@ build_stella_program() {
     -o "$BUILD/$(basename "$1")"
 }
 
-echo "== C tests"
 for source in tests/c/*.c; do
   name=$(basename "$source" .c)
+  selected c "$name" || continue
+  echo "== $name"
   if ! build_c_test "$name"; then
     failed=$((failed + 1))
     echo "FAIL $name: does not build"
@@ -129,16 +140,17 @@ done
 # Lines of cases.txt: PROGRAM ARGUMENT LIMIT EXPECTED, where PROGRAM is a path
 # without the extension and LIMIT is in bytes or "default".
 if [ -f tests/stella/cases.txt ]; then
-  echo "== Stella programs"
   built=""
   while read -r program argument limit expected; do
     case $program in
       "" | "#"*) continue ;;
     esac
     name=$(basename "$program")
+    selected stella "$name" || continue
     case " $built " in
       *" $name "*) ;;
       *)
+        echo "== $name"
         if ! build_stella_program "$program"; then
           failed=$((failed + 1))
           echo "FAIL $name: does not build"
@@ -159,5 +171,9 @@ if [ -f tests/stella/cases.txt ]; then
   done < tests/stella/cases.txt
 fi
 
+if [ $((passed + failed)) -eq 0 ]; then
+  echo "no test is named '$ONLY'"
+  exit 1
+fi
 echo "passed: $passed, failed: $failed"
 [ "$failed" -eq 0 ]
