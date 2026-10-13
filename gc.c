@@ -125,6 +125,18 @@ static size_t occupied_bytes(void) {
   return space_used(&young) + space_used(&old);
 }
 
+static void update_maximums(void) {
+  if (space_used(&young) > counters.maximum_young_bytes) {
+    counters.maximum_young_bytes = space_used(&young);
+  }
+  if (space_used(&old) > counters.maximum_old_bytes) {
+    counters.maximum_old_bytes = space_used(&old);
+  }
+  if (occupied_bytes() > counters.maximum_occupied_bytes) {
+    counters.maximum_occupied_bytes = occupied_bytes();
+  }
+}
+
 static StellaValue require_object(StellaValue *object_root) {
   if (object_root == NULL || *object_root == NULL) {
     stella_abi_violation("null object");
@@ -291,11 +303,12 @@ static void collect_minor(void) {
     forward_managed_fields(remembered[i]);
   }
   scan_copied(scan);
+  counters.minor_copied_bytes += (size_t)(old.next - scan);
 
   // young is empty now, no old object points to it
   forget_remembered();
   young.next = young.start;
-  ++counters.collections;
+  ++counters.minor_collections;
 }
 
 static void collect_full(void) {
@@ -304,6 +317,7 @@ static void collect_full(void) {
 
   forward_roots();
   scan_copied(old_reserve.start);
+  counters.full_copied_bytes += space_used(&old_reserve);
 
   remembered_count = 0;
   young.next = young.start;
@@ -314,7 +328,7 @@ static void collect_full(void) {
   old_reserve.next = old_reserve.start;
 
   full_collection = false;
-  ++counters.collections;
+  ++counters.full_collections;
 }
 
 static void write_barrier(StellaValue owner, StellaValue value) {
@@ -375,7 +389,6 @@ void stella_gc_shutdown(void) {
   remembered = NULL;
   dynamic_roots = NULL;
   permanent_roots = NULL;
-  counters.occupied_bytes = 0;
   lifecycle = LIFECYCLE_FINISHED;
 }
 
@@ -464,10 +477,10 @@ StellaValue stella_gc_alloc(const StellaObjectDescriptor *descriptor) {
 
   counters.requested_bytes += size;
   ++counters.allocated_objects;
-  counters.occupied_bytes = occupied_bytes();
-  if (counters.occupied_bytes > counters.maximum_occupied_bytes) {
-    counters.maximum_occupied_bytes = counters.occupied_bytes;
+  if (large) {
+    ++counters.old_allocations;
   }
+  update_maximums();
   return object;
 }
 
@@ -617,33 +630,51 @@ void stella_gc_print_statistics(FILE *output) {
   if (output == NULL) {
     stella_abi_violation("null statistics output stream");
   }
-  fprintf(output, "requested bytes: %zu\n", counters.requested_bytes);
+  fprintf(output, "allocated bytes: %zu\n", counters.requested_bytes);
   fprintf(output, "allocated objects: %zu\n", counters.allocated_objects);
-  fprintf(output, "collections: %zu\n", counters.collections);
-  fprintf(output, "occupied bytes: %zu\n", occupied_bytes());
   fprintf(
       output,
-      "maximum occupied bytes: %zu\n",
-      counters.maximum_occupied_bytes);
+      "objects allocated directly in old: %zu\n",
+      counters.old_allocations);
+  fprintf(output, "failed allocations: %zu\n", counters.failed_allocations);
+  fprintf(
+      output,
+      "collections: total %zu, minor %zu, full %zu\n",
+      counters.minor_collections + counters.full_collections,
+      counters.minor_collections,
+      counters.full_collections);
+  fprintf(
+      output,
+      "copied bytes: minor %zu, full %zu\n",
+      counters.minor_copied_bytes,
+      counters.full_copied_bytes);
+  fprintf(
+      output,
+      "occupied bytes: total %zu, young %zu, old %zu\n",
+      occupied_bytes(),
+      space_used(&young),
+      space_used(&old));
+  fprintf(
+      output,
+      "maximum occupied bytes: total %zu, young %zu, old %zu\n",
+      counters.maximum_occupied_bytes,
+      counters.maximum_young_bytes,
+      counters.maximum_old_bytes);
   fprintf(output, "managed reads: %zu\n", counters.managed_reads);
   fprintf(output, "managed writes: %zu\n", counters.managed_writes);
   fprintf(output, "primitive reads: %zu\n", counters.primitive_reads);
   fprintf(output, "primitive writes: %zu\n", counters.primitive_writes);
-  fprintf(
-      output,
-      "read barrier activations: %zu\n",
-      counters.read_barrier_activations);
+  fprintf(output, "read barrier activations: 0 (the collector has none)\n");
   fprintf(
       output,
       "write barrier activations: %zu\n",
       counters.write_barrier_activations);
-  fprintf(output, "dynamic roots: %zu\n", dynamic_root_depth);
+  fprintf(output, "root stack depth: %zu\n", dynamic_root_depth);
   fprintf(
       output,
-      "maximum dynamic roots: %zu\n",
+      "maximum root stack depth: %zu\n",
       counters.maximum_dynamic_root_depth);
   fprintf(output, "permanent roots: %zu\n", permanent_root_count);
-  fprintf(output, "failed allocations: %zu\n", counters.failed_allocations);
 }
 
 void stella_gc_print_roots(FILE *output) {
@@ -672,10 +703,11 @@ void stella_gc_print_roots(FILE *output) {
 static void print_space(FILE *output, const char *name, const Space *space) {
   fprintf(
       output,
-      "%s: [%p,%p) size=%zu occupied=%zu free=%zu\n",
+      "%s: [%p,%p) next=%p size=%zu occupied=%zu free=%zu\n",
       name,
       (void *)space->start,
       (void *)space->end,
+      (void *)space->next,
       space_capacity(space),
       space_used(space),
       space_free(space));
