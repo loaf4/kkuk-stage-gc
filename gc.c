@@ -1,3 +1,26 @@
+/* Generational copying collector for Stella runtime (see stella/gc.h).
+ *
+ * Heap consists of three spaces:
+ *   young       - new objects are allocated here by bumping pointer;
+ *   old         - objects that survived collection;
+ *   old_reserve - empty semispace, used only by full collection.
+ *
+ * Minor collection copies reachable young objects to end of old and
+ * empties young. Full collection copies everything reachable from young and
+ * old into old_reserve, then old and old_reserve swap roles.
+ *
+ * Invariants:
+ *   I1. Occupied memory, young plus old, never exceeds max_heap_bytes.
+ *       Capacity of old and old_reserve is max_heap_bytes, so 
+ *       survivors of any collection always fit into space they go to.
+ *   I2. Outside of collection old_reserve is empty and no object has 
+ *       forwarding pointer in its gc_word.
+ *   I3. Every old object that has field pointing into young is in 
+ *       remembered set. Write barrier keeps this true.
+ *   I4. Static objects and NULL are outside every space, collection
+ *       never moves or modifies them. */
+
+
 #include <stella/gc.h>
 
 #include "internal/gc_stats.h"
@@ -13,6 +36,13 @@ typedef struct Space {
   unsigned char *end;
 } Space;
 
+/* Bits of gc_word.
+ * FORWARDED:  object has been copied and rest of word is address of copy.
+ *             Object sizes are 24 + 8c bytes, so object addresses are
+ *             multiples of 8 and their low bits are free.
+ * REMEMBERED: object is in remembered set. Only old objects get this bit
+ *             and old objects are forwarded only by full collection,
+ *             which overwrites whole word. */
 #define GC_WORD_FORWARDED ((uintptr_t)1)
 #define GC_WORD_REMEMBERED ((uintptr_t)2)
 
@@ -170,6 +200,8 @@ static void grow_roots(
   *capacity = next;
 }
 
+/* Size of young generation, from STELLA_GC_YOUNG_BYTES. Default is quarter 
+ * of max_heap_bytes;. Bigger value than max_heap_bytes is clamped to it. */
 static size_t read_young_bytes(void) {
   size_t result = max_heap_bytes / 4;
   const char *text = getenv(YOUNG_BYTES_VARIABLE);
@@ -223,6 +255,11 @@ static StellaValue forwarding_address(StellaValue object) {
   return (StellaValue)(object->gc_word & ~GC_WORD_FORWARDED);
 }
 
+/* Copies object to end of to_space, then its last child that still has
+ * to be copied, then that child's last such child, and so on until copied
+ * object has no such children.
+ * Fields of copies still hold old addresses, scan_copied fixes them later. 
+ * Room in to_space is not checked: it is guaranteed by I1. */
 static void chase(StellaValue object) {
   while (object != NULL) {
     const StellaObjectDescriptor *descriptor = object->descriptor;
@@ -249,6 +286,9 @@ static void chase(StellaValue object) {
   }
 }
 
+/* Returns address value has after current collection. Object
+ * is copied first time it is reached, later references find
+ * forwarding pointer and get same copy. */
 static StellaValue forward(StellaValue value) {
   if (value == NULL || !in_from_space(value)) {
     return value;
@@ -275,6 +315,11 @@ static void forward_roots(void) {
   }
 }
 
+/* Scanning loop of Cheney's algorithm. Objects in [scan, next) are copied,
+ * but their fields still hold old addresses. Fixing field may copy more 
+ * objects to end, so next grows during loop. When scan catches up with it,
+ * everything reachable has been copied and fixed. Only managed fields
+ * are touched: primitive fields are never pointers. */
 static void scan_copied(unsigned char *scan) {
   while (scan < to_space->next) {
     StellaValue object = (StellaValue)scan;
@@ -290,6 +335,10 @@ static void forget_remembered(void) {
   remembered_count = 0;
 }
 
+/* Minor collection: reachable young objects are copied to end of old and
+ * young becomes empty. Old objects are not traced. Roots are root stack, 
+ * permanent roots and fields of remembered objects: by I3 no other old
+ * object points into young. By I1 old has room for all of young. */
 static void collect_minor(void) {
   if (space_used(&young) == 0) {
     return;
@@ -311,6 +360,11 @@ static void collect_minor(void) {
   ++counters.minor_collections;
 }
 
+/* Full collection: everything reachable from roots, young or old, is copied 
+ * into old_reserve, which then becomes old (I2 holds again afterwards).
+ * This is only place where garbage in old is freed. Remembered set is
+ * not root set here, and it is emptied: young is empty after collection,
+ * so I3 holds with empty set. */
 static void collect_full(void) {
   to_space = &old_reserve;
   full_collection = true;
@@ -331,6 +385,12 @@ static void collect_full(void) {
   ++counters.full_collections;
 }
 
+/* Write barrier, called before `value` is stored into field of `owner`.
+ * It keeps I3: if old object gets pointer to young one, old object is added 
+ * to remembered set. Whole object is remembered rather than field address, 
+ * because stella_gc_update_object may later turn that field into primitive.
+ * Minor collection reads fields through current descriptor. 
+ * Only actual addition counts as barrier activation. */
 static void write_barrier(StellaValue owner, StellaValue value) {
   if (value == NULL || !in_space(&young, value)) {
     return;
@@ -430,6 +490,15 @@ void stella_gc_register_permanent_root(StellaValue *root) {
   counters.permanent_root_count = permanent_root_count;
 }
 
+/* Minor collection is run when object does not fit into young 
+ * or when allocating it would break I1. If I1 would still break after it,
+ * full collection is run and if even then reachable objects plus new one
+ * exceed max_heap_bytes, program ends with out-of-memory message.
+ *
+ * Object bigger than whole young generation is allocated directly in old. 
+ * It always gets minor collection first: young is empty afterwards, 
+ * stella_object_init_managed, which has no write barrier, cannot store 
+ * young pointer into this old object and I3 holds. */
 StellaValue stella_gc_alloc(const StellaObjectDescriptor *descriptor) {
   require_active();
   validate_descriptor(descriptor);
@@ -578,6 +647,9 @@ void stella_object_write_primitive(
   ++counters.primitive_writes;
 }
 
+/* No collection is run here, so object stays where it is and every
+ * reference to it sees update. New managed fields go through write
+ * barrier (I3). Descriptor is replaced last. */
 void stella_gc_update_object(
     StellaValue *object_root,
     const StellaObjectDescriptor *new_descriptor,
